@@ -173,4 +173,7 @@ st.plotly_chart(fig)
 # Tableau Bourse simplifié
 if not df_pea.empty:
     st.subheader("Top Actions")
+
     st.dataframe(df_pea[['NOM', 'Total']].sort_values('Total', ascending=False).head(5))
+
+# Dernière MAJ
