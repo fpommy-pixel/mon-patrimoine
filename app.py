@@ -39,71 +39,94 @@ def get_ticker_yahoo(raw_symbol):
 def load_data():
     file_path = "patrimoine.xlsx"
     
-    # 1. Onglet PORTFEUILLE PEA
+    # Fonction utilitaire pour trouver le nom de feuille sans casse/espace
+    def find_sheet(excel_file, target_name):
+        """Trouve la feuille de calcul en ignorant la casse et les espaces aux extrémités."""
+        for name in excel_file.sheet_names:
+            if name.strip().lower() == target_name.lower():
+                return name
+        return None
+    
+    # Tente d'ouvrir le fichier Excel
     try:
-        # On lit l'onglet, on cherche la ligne d'en-tête "CODE GOOGLE"
-        df_raw = pd.read_excel(file_path, sheet_name="Portefeuille PEA", header=None)
-        # On cherche la ligne qui contient "CODE GOOGLE"
-        start_row = df_raw[df_raw.apply(lambda row: row.astype(str).str.contains("CODE GOOGLE").any(), axis=1)].index[0]
-        
-        df_pea = pd.read_excel(file_path, sheet_name="Portefeuille PEA", skiprows=start_row+1)
-        
-        # On renomme les colonnes pour être sûr (colonne 0 = Code, col 1 = Nom...)
-        cols = list(df_pea.columns)
-        cols[0] = 'CODE'
-        cols[1] = 'NOM'
-        cols[2] = 'EN_PORTEFEUILLE'
-        cols[4] = 'NB_PARTS'
-        cols[5] = 'PRU'
-        df_pea.columns = cols
-        
-        # Filtrer uniquement ceux "En portefeuille"
-        df_pea = df_pea[df_pea['EN_PORTEFEUILLE'] == True].copy()
-        
-        # Nettoyage chiffres
-        df_pea['NB_PARTS'] = df_pea['NB_PARTS'].apply(clean_currency)
-        df_pea['PRU'] = df_pea['PRU'].apply(clean_currency)
+        xlsx = pd.ExcelFile(file_path)
     except Exception as e:
-        st.error(f"Erreur onglet PEA: {e}")
+        st.error(f"FATAL: Erreur lors de l'ouverture de 'patrimoine.xlsx': {e}")
+        return pd.DataFrame(), pd.DataFrame(), {}
+    
+    # --- DIAGNOSTIC CLÉ (affiche la liste exacte des onglets trouvés) ---
+    st.info(f"Onglets trouvés : {xlsx.sheet_names}")
+    # --------------------------------------------------------------------
+
+    # --- 1. Chargement PEA ---
+    try:
+        sheet_name_pea = find_sheet(xlsx, "Portefeuille PEA")
+        if sheet_name_pea is None:
+            st.error(f"ERREUR PEA: L'onglet 'Portefeuille PEA' est introuvable. Vérifiez la casse/les espaces dans le nom.")
+            df_pea = pd.DataFrame()
+        else:
+            # On utilise le nom de feuille trouvé, même s'il a des majuscules différentes
+            df_raw = pd.read_excel(xlsx, sheet_name=sheet_name_pea, header=None)
+            start_row = df_raw[df_raw.apply(lambda row: row.astype(str).str.contains("CODE GOOGLE").any(), axis=1)].index[0]
+            df_pea = pd.read_excel(xlsx, sheet_name=sheet_name_pea, skiprows=start_row+1)
+            # ... (le reste du nettoyage PEA reste inchangé) ...
+            cols = list(df_pea.columns)
+            cols[0] = 'CODE'
+            cols[1] = 'NOM'
+            cols[2] = 'EN_PORTEFEUILLE'
+            cols[4] = 'NB_PARTS'
+            cols[5] = 'PRU'
+            df_pea.columns = cols
+            df_pea = df_pea[df_pea['EN_PORTEFEUILLE'] == True].copy()
+            df_pea['NB_PARTS'] = df_pea['NB_PARTS'].apply(clean_currency)
+            df_pea['PRU'] = df_pea['PRU'].apply(clean_currency)
+    except Exception as e:
+        st.error(f"Erreur lecture PEA (Ligne de données après l'en-tête: {e}")
         df_pea = pd.DataFrame()
 
-    # 2. Onglet CRYPTO
+    # --- 2. Chargement Crypto ---
     try:
-        df_crypto = pd.read_excel(file_path, sheet_name="Crypto")
-        df_crypto['Nombre possédés'] = df_crypto['Nombre possédés'].apply(clean_currency)
+        sheet_name_crypto = find_sheet(xlsx, "Crypto")
+        if sheet_name_crypto is None:
+            st.error(f"ERREUR CRYPTO: L'onglet 'Crypto' est introuvable.")
+            df_crypto = pd.DataFrame()
+        else:
+            df_crypto = pd.read_excel(xlsx, sheet_name=sheet_name_crypto)
+            df_crypto['Nombre possédés'] = df_crypto['Nombre possédés'].apply(clean_currency)
     except Exception as e:
-        st.error(f"Erreur onglet Crypto: {e}")
+        st.error(f"Erreur onglet Crypto (colonnes): {e}")
         df_crypto = pd.DataFrame()
 
-    # 3. Onglet MON PATRIMOINE (Récap)
+    # --- 3. Chargement Patrimoine Global (Statique) ---
     try:
-        df_pat = pd.read_excel(file_path, sheet_name="Mon Patrimoine", header=None)
-        
-        def get_val(label):
-            # Cherche le texte exact dans tout l'onglet
-            mask = df_pat.apply(lambda row: row.astype(str).str.contains(label, regex=False).any(), axis=1)
-            if mask.any():
-                idx = mask.idxmax()
-                # On suppose que la valeur est dans la colonne juste à côté (colonne C / index 2)
-                val = df_pat.iloc[idx, 2] 
-                return clean_currency(val)
-            return 0.0
+        sheet_name_patrimoine = find_sheet(xlsx, "Mon Patrimoine")
+        if sheet_name_patrimoine is None:
+            st.error(f"ERREUR PATRIMOINE: L'onglet 'Mon Patrimoine' est introuvable.")
+            statique = {}
+        else:
+            df_pat = pd.read_excel(xlsx, sheet_name=sheet_name_patrimoine, header=None)
             
-        statique = {
-            "Immobilier": get_val("Résidence principale") + get_val("Immobilier Locatif"),
-            "Liquidités": get_val("Comptes courant") + get_val("Epargne"),
-            "Crowd": get_val("Crowfunding") + get_val("Crowlending"),
-            "Or": get_val("OR"),
-            "Assurance Vie": get_val("Assurance Vie"),
-            "Dettes": get_val("Passif (dettes)")
-        }
+            def get_val(label):
+                mask = df_pat.apply(lambda row: row.astype(str).str.contains(label, regex=False).any(), axis=1)
+                if mask.any():
+                    idx = mask.idxmax()
+                    val = df_pat.iloc[idx, 2] 
+                    return clean_currency(val)
+                return 0.0
+                
+            statique = {
+                "Immobilier": get_val("Résidence principale") + get_val("Immobilier Locatif"),
+                "Liquidités": get_val("Comptes courant") + get_val("Epargne"),
+                "Crowd": get_val("Crowfunding") + get_val("Crowlending"),
+                "Or": get_val("OR"),
+                "Assurance Vie": get_val("Assurance Vie"),
+                "Dettes": get_val("Passif (dettes)")
+            }
     except Exception as e:
-        st.error(f"Erreur onglet Patrimoine: {e}")
+        st.error(f"Erreur onglet Patrimoine (libellés): {e}")
         statique = {}
 
     return df_pea, df_crypto, statique
-
-df_pea, df_crypto, statique = load_data()
 
 # --- RECUPERATION PRIX LIVE ---
 list_tickers = []
@@ -177,3 +200,4 @@ if not df_pea.empty:
     st.dataframe(df_pea[['NOM', 'Total']].sort_values('Total', ascending=False).head(5))
 
 # Dernière MAJ
+
